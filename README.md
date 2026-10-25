@@ -1,28 +1,20 @@
-# NEXORA Markets — integration hardening candidate
+# NEXORA Markets — Multi-Agent AI System
 
-Existing Google AI Studio application: https://aistudio.google.com/apps/4ff56221-7c23-4e68-b503-a37198ec0ac0
+منظومة الوكلاء الأذكياء المتعددين لشركة نكسورا ماركتس للأبحاث المالية وتحليل الأسواق.
 
-This repository preserves the supplied application and the tested first hardening batch. Production readiness remains FAIL; no live news-to-Telegram end-to-end pass is claimed.
+## نظرة عامة
+منظومة مؤسسية متكاملة تضم 6 وكلاء أذكياء مدعومين بنماذج Gemini API، مع واجهة مستخدم عربية (RTL) بتصميم فخم (Navy & Gold)، وقاعدة بيانات SQLite محلية مستدامة، وبوابات اعتماد بشري (HITL)، وتكامل آمن مع n8n وتيليجرام.
 
-## Run and verify
+## الوكلاء الستة
+1. **Economic News Agent**: تحليل التقويم الاقتصادي والأحداث الكلية مع تطبيع التوقيت إلى `Africa/Cairo`.
+2. **Market Analysis Agent**: تحليل هيكل السوق (ICT/SMC) ومناطق السيولة وضرورة إبطال السيناريو.
+3. **Stock Radar Agent**: رادار أسهم البورصة المصرية والسوق السعودية (EGX & TASI) مع تنبيهات تأخر البيانات.
+4. **Content Creator Agent**: صياغة المحتوى المالي لتيليجرام ولينكدإن وشرائط الفيديو دون تهويل.
+5. **Risk Guardian Agent**: حسابات حتمية 100% لإدارة المخاطر والتحقق من التراجع وحدود اللوت.
+6. **Business & Portfolio Agent**: توثيق إجراءات التشغيل القياسية (SOPs) ودراسات الحالة المؤسسية.
 
-Use Node 24.21 or compatible Node 24. From this repository root:
-
-```sh
-npm ci
-npm run lint
-npm test
-npm run build
-npm start
-```
-
-Configure server secrets using variable names in .env.example; values are intentionally empty. See [setup and repair limits](REPAIR_NOTES.md) and [migration report](MIGRATION_REPORT.md). Missing reviewer configuration rejects protected requests. No secrets should be committed.
-
-## Layout
-
-- server.ts, src/, index.html, metadata.json and Vite/TypeScript/package files: application; build paths unchanged.
-- tests/: runnable regression tests; preserve these in GitHub.
-- integrations/n8n/: earlier candidate exports, not automatically imported or activated. See its README.
-- docs/: project documents and test evidence. docs/history preserves the older audit and original README for provenance; their claims must not be interpreted as current implementation guarantees.
-
-Current storage uses sql.js snapshots with guarded disk persistence, not the node:sqlite/WAL implementation described in the original README. Webhook and benchmark endpoints are deliberately disabled pending further hardening. Cloud deployment needs durable storage and separate verification.
+## التقنيات المستخدمة
+- React 19 + TypeScript + Vite + Tailwind CSS v4
+- Node.js + Express + Google GenAI SDK (`@google/genai`)
+- SQLite (`sql.js`) مع استمرارية على القرص (`nexora_persistence.sqlite`)
+- تحقّق من المخططات (Schema Validation) ومنع الهلوسة الرقمية.

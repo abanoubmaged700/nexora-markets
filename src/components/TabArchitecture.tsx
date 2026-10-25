@@ -35,14 +35,14 @@ export const TabArchitecture: React.FC = () => {
         <div className="absolute top-0 right-0 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl -z-10"></div>
         <div className="max-w-4xl space-y-4">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-semibold">
-            <span>وثيقة الهندسة المعمارية الشاملة - NEXORA Multi-Agent v1.2</span>
+            <span dir="ltr">وثيقة الهندسة المعمارية الشاملة - NEXORA Multi-Agent v1.2</span>
           </div>
           <h1 className="text-2xl md:text-4xl font-extrabold text-white leading-tight">
             طبقة الذكاء الاصطناعي وهندسة الوكلاء المتعددين منخفضة التكلفة
           </h1>
           <p className="text-slate-300 text-sm md:text-base leading-relaxed">
             نظام إنتاجي متكامل مصمم خصيصاً لشركة <strong className="text-amber-300">NEXORA Markets</strong> للأبحاث المالية والتعليم والتداول. 
-            يربط بين قوة نماذج <strong className="text-indigo-300 font-mono">Gemini 3.8 Flash</strong> ومحرك الأتمتة <strong className="text-amber-300">n8n</strong> وقنوات النشر على <strong className="text-sky-400">Telegram</strong> والتوثيق في <strong className="text-rose-400">Notion</strong> وأدوات البرمجة في <strong className="text-emerald-400">Codex</strong>، 
+            يربط بين قوة نماذج <span dir="ltr" className="inline-block"><strong className="text-indigo-300 font-mono">Gemini 3.8 Flash</strong></span> ومحرك الأتمتة <strong className="text-amber-300">n8n</strong> وقنوات النشر على <strong className="text-sky-400">Telegram</strong> والتوثيق في <strong className="text-rose-400">Notion</strong> وأدوات البرمجة في <strong className="text-emerald-400">Codex</strong>، 
             مع ضمان عدم الهلوسة وفصل الحسابات المالية الحتمية وحماية رأس المال بنسبة 100%.
           </p>
         </div>
@@ -54,13 +54,14 @@ export const TabArchitecture: React.FC = () => {
           <div>
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
               <Workflow className="w-5 h-5 text-amber-400" />
-              مخطط تدفق البيانات بين الوكلاء والأنظمة (End-to-End Pipeline)
+              <span>مخطط تدفق البيانات بين الوكلاء والأنظمة </span>
+              <span dir="ltr" className="inline-block">(End-to-End Pipeline)</span>
             </h2>
             <p className="text-xs text-slate-400">
               كيف تنتقل البيانات من المصادر المعتمدة وحتى القنوات العامة بعد التحقق والاعتماد البشري
             </p>
           </div>
-          <span className="px-3 py-1 rounded-md bg-slate-800 text-amber-400 text-xs font-mono border border-slate-700">
+          <span dir="ltr" className="px-3 py-1 rounded-md bg-slate-800 text-amber-400 text-xs font-mono border border-slate-700">
             Idempotency & Zero-Hallucination Gate
           </span>
         </div>
@@ -96,7 +97,7 @@ export const TabArchitecture: React.FC = () => {
           <div className="p-4 rounded-xl bg-gradient-to-b from-indigo-950/60 to-slate-800/80 border border-indigo-700/50 flex flex-col justify-between space-y-3">
             <div>
               <div className="text-[11px] font-mono text-indigo-300 font-semibold mb-1">المرحلة 3: طبقة الذكاء</div>
-              <h3 className="font-bold text-white text-sm">Gemini API (3.8 Flash)</h3>
+              <h3 className="font-bold text-white text-sm" dir="ltr">Gemini API (3.8 Flash)</h3>
               <p className="text-xs text-slate-400 mt-2">
                 تنفيذ الوكيل المطلوب بدقة متناهية وحرارة منخفضة (0.1 - 0.2) وإرجاع JSON منضبط بمخطط العقد الموحد.
               </p>
