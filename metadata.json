@@ -1,0 +1,6 @@
+{
+  "name": "NEXORA Markets Multi-Agent AI System",
+  "description": "منصة وهندسة الوكلاء الأذكياء المتعددين لشركة نكسورا ماركتس (NEXORA Markets) للأبحاث المالية والتحليل الاقتصادي وإدارة المخاطر وأتمتة المحتوى عبر Gemini API و n8n.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
