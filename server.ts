@@ -1,3 +1,4 @@
+import { approvalAuth, approvalHandler, digest } from './src/security/approval.js';
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -15,7 +16,11 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = 3000;
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '1mb' }));
+app.use('/api', (req, res, next) => {
+  if (req.path === '/health' || req.path === '/n8n/webhook') return next();
+  return approvalAuth(req, res, next);
+});
 
 // Initialize GoogleGenAI SDK safely
 let ai: GoogleGenAI | null = null;
@@ -143,6 +148,10 @@ function calculateRiskMetrics(data: any) {
   const riskRewardRatio = priceRiskPerUnit > 0 ? Number((potentialProfitPerUnit / priceRiskPerUnit).toFixed(2)) : 0;
 
   const violations: string[] = [];
+  for (const field of ['accountEquity','entryPrice','stopLoss','takeProfit','positionUnits']) {
+    if (typeof data[field] !== 'number' || !Number.isFinite(data[field]) || data[field] <= 0) violations.push('Invalid required risk input: ' + field);
+  }
+  if (priceRiskPerUnit === 0 || !Number.isFinite(riskPercentage) || !Number.isFinite(riskRewardRatio)) violations.push('Invalid risk calculation');
   if (riskPercentage > 2.0) {
     violations.push(`تجاوز حد المخاطرة للصفقة الواحدة (${riskPercentage.toFixed(2)}% > الحد الأقصى 2.0%)`);
   }
@@ -175,15 +184,21 @@ function calculateRiskMetrics(data: any) {
 // Strict Schema & Anti-Hallucination Validator
 function validateAgentOutput(agentId: string, parsedOutput: any, inputs: any) {
   const errors: string[] = [];
-  if (!parsedOutput || typeof parsedOutput !== 'object') {
+  if (!parsedOutput || typeof parsedOutput !== 'object' || Array.isArray(parsedOutput)) {
     return { isValid: false, errors: ['Output is not a valid JSON object'] };
+  }
+
+  const schema = NEXORA_AGENTS.find(a => a.id === agentId)?.outputSchemaJson;
+  if (!schema) errors.push('Unknown agent');
+  for (const field of schema?.required || []) {
+    if (parsedOutput[field] === undefined || parsedOutput[field] === null) errors.push('Missing required output: ' + field);
   }
 
   if (agentId === 'economic_news_agent') {
     if (!parsedOutput.event_name_ar && !parsedOutput.event_name) {
       errors.push('Missing event name in economic news output');
     }
-    if (inputs?.actual && parsedOutput.figures?.actual && inputs.actual !== parsedOutput.figures.actual) {
+    if (inputs?.actual !== undefined && inputs.actual !== parsedOutput.figures?.actual) {
       errors.push(`Hallucination warning: Input actual (${inputs.actual}) does not match output actual (${parsedOutput.figures.actual})`);
     }
   }
@@ -249,7 +264,9 @@ async function executeGeminiWithRetry(
         };
       } catch (err: any) {
         lastError = err;
-        console.warn(`[NEXORA Retry] Model ${modelName} attempt ${attempt} failed: ${err.message}. Retrying...`);
+        const status = Number(err.status || err.code);
+        if (![408, 429, 500, 502, 503, 504].includes(status)) throw err;
+        console.warn(`[NEXORA Retry] Model ${modelName} attempt ${attempt} failed with status ${status}`);
         const delay = Math.min(1000 * Math.pow(2, attempt - 1) + Math.random() * 200, 5000);
         await new Promise((r) => setTimeout(r, delay));
       }
@@ -269,6 +286,12 @@ app.post('/api/gemini/agent-run', async (req: Request, res: Response) => {
     model = 'gemini-3.8-flash',
     forceDeterministicRisk = false,
   } = req.body;
+
+  const definition = NEXORA_AGENTS.find(a => a.id === agentId);
+  if (!definition || !inputPayload || typeof inputPayload !== 'object' || Array.isArray(inputPayload)) return res.status(400).json({ error: 'INVALID_AGENT_OR_INPUT' });
+  if (definition.requiredInputData.some(f => f.required && inputPayload[f.field] === undefined)) return res.status(400).json({ error: 'MISSING_REQUIRED_INPUT' });
+  if (systemInstruction || forceDeterministicRisk || (req.body.model && req.body.model !== definition.recommendedModel)) return res.status(400).json({ error: 'POLICY_OVERRIDE_FORBIDDEN' });
+  if (!getDb()) return res.status(503).json({ error: 'DATABASE_UNAVAILABLE' });
 
   const runId = `run_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const cairoTimeIso = new Date().toLocaleString('en-US', { timeZone: 'Africa/Cairo' });
@@ -340,14 +363,17 @@ Respond in Arabic for analytical and descriptive fields, and maintain English fo
       }
     }
 
+    if (parsedJson?.agent_id || parsedJson?.outputs || parsedJson?.human_approval_status) {
+      throw new Error('MODEL_CONTRACT_FIELDS_FORBIDDEN');
+    }
     const validation = validateAgentOutput(agentId, parsedJson, inputPayload);
     const validationStatus = validation.isValid ? 'VALIDATED' : 'VALIDATION_FAILED';
 
-    const usageMetadata = response?.usageMetadata || { promptTokenCount: 150, candidatesTokenCount: 200, totalTokenCount: 350 };
+    const usageMetadata = response?.usageMetadata || {};
     const promptTokens = usageMetadata.promptTokenCount || 0;
     const completionTokens = usageMetadata.candidatesTokenCount || 0;
     const totalTokens = usageMetadata.totalTokenCount || (promptTokens + completionTokens);
-    const estimatedCostUsd = (promptTokens / 1_000_000) * 0.075 + (completionTokens / 1_000_000) * 0.30;
+    const estimatedCostUsd = 0; // Cost unknown: do not fabricate billing estimates.
 
     const finalContract = standardizeContract(
       agentId,
@@ -386,7 +412,7 @@ Respond in Arabic for analytical and descriptive fields, and maintain English fo
       );
 
       // Update or insert agent_health
-      const checkHealth = db.exec(`SELECT * FROM agent_health WHERE agent_id = '${agentId}';`);
+      const checkHealth = db.exec('SELECT * FROM agent_health WHERE agent_id = ?', [agentId]);
       if (checkHealth.length === 0 || checkHealth[0].values.length === 0) {
         db.run(
           `INSERT INTO agent_health (agent_id, status, total_runs, successful_runs, failed_runs, avg_latency_ms, last_successful_run, total_tokens, total_cost_usd, last_model_used, last_validation) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?);`,
@@ -451,102 +477,12 @@ Respond in Arabic for analytical and descriptive fields, and maintain English fo
   }
 });
 
-// Benchmark Suite Runner
-app.post('/api/benchmarks/run', async (req: Request, res: Response) => {
-  const benchmarkResults = [];
-  
-  for (const agent of NEXORA_AGENTS) {
-    const startTime = Date.now();
-    const testInput = agent.testCases[0]?.input || { symbol: 'XAUUSD', event_name: 'Test Event', accountEquity: 10000 };
-
-    try {
-      if (!ai) throw new Error('API key missing');
-      
-      const promptContent = `Run benchmark test for ${agent.nameEn} with input: ${JSON.stringify(testInput)}`;
-      const { response, modelUsed, attempts } = await executeGeminiWithRetry(
-        promptContent,
-        agent.systemPrompt,
-        agent.recommendedModel,
-        agent.outputSchemaJson,
-        agent.temperature
-      );
-
-      const latencyMs = Date.now() - startTime;
-      const rawText = response?.text || '{}';
-      let parsedJson = {};
-      try { parsedJson = JSON.parse(rawText); } catch { parsedJson = { raw: rawText }; }
-
-      benchmarkResults.push({
-        agent_id: agent.id,
-        name: agent.nameAr,
-        status: 'PASSED',
-        model_used: modelUsed,
-        latency_ms: latencyMs,
-        attempts: attempts,
-        zero_hallucination_score: 100,
-        schema_compliant: true,
-      });
-    } catch (err: any) {
-      benchmarkResults.push({
-        agent_id: agent.id,
-        name: agent.nameAr,
-        status: 'FAILED',
-        error: err.message,
-        latency_ms: Date.now() - startTime,
-        zero_hallucination_score: 0,
-        schema_compliant: false,
-      });
-    }
-  }
-
-  res.json({ success: true, timestamp: new Date().toISOString(), results: benchmarkResults });
-});
-
-// Secure n8n Webhook Endpoint
-app.post('/api/n8n/webhook', (req: Request, res: Response) => {
-  const signature = req.headers['x-nexora-signature'];
-  const expectedSecret = process.env.N8N_WEBHOOK_SECRET || 'nexora_secure_shared_secret_2026';
-
-  if (!signature || signature !== expectedSecret) {
-    return res.status(401).json({ success: false, error: 'Unauthorized: Invalid X-NEXORA-Signature' });
-  }
-
-  const payload = req.body;
-  const runId = `n8n_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const db = getDb();
-
-  if (db) {
-    db.run(
-      `INSERT INTO publication_logs (run_id, agent_id, channel, payload_json, published_at, status) VALUES (?, ?, ?, ?, ?, ?);`,
-      [runId, payload.agent_id || 'economic_news_agent', 'TELEGRAM_PUBLIC', JSON.stringify(payload), new Date().toISOString(), 'QUEUED']
-    );
-    saveDatabaseToDisk();
-  }
-
-  return res.json({ success: true, message: 'N8n Webhook received securely', run_id: runId });
-});
+// Fail closed: these routes previously reported unverified success.
+app.post('/api/benchmarks/run', (_req, res) => res.status(503).json({ error: 'BENCHMARK_DISABLED_UNTIL_MEASURED_ASSERTIONS_EXIST' }));
+app.post('/api/n8n/webhook', (_req, res) => res.status(503).json({ error: 'WEBHOOK_DISABLED_PENDING_HARDENING' }));
 
 // Human Approval Endpoint
-app.post('/api/executions/:runId/approval', (req: Request, res: Response) => {
-  const { runId } = req.params;
-  const { action, editorId } = req.body;
-  const db = getDb();
-  const nowIso = new Date().toISOString();
-
-  if (db) {
-    db.run(
-      `INSERT INTO approval_decisions (run_id, agent_id, decision, editor_id, timestamp) VALUES (?, ?, ?, ?, ?);`,
-      [runId, 'content_creator_agent', action, editorId || 'Editor_Lead', nowIso]
-    );
-    db.run(
-      `UPDATE agent_executions SET human_approval_status = ? WHERE run_id = ?;`,
-      [action === 'APPROVE' ? 'APPROVED' : 'REJECTED', runId]
-    );
-    saveDatabaseToDisk();
-  }
-
-  return res.json({ success: true, run_id: runId, new_approval_status: action === 'APPROVE' ? 'APPROVED' : 'REJECTED' });
-});
+app.post('/api/executions/:runId/approval', approvalHandler(getDb, saveDatabaseToDisk));
 
 function standardizeContract(
   agentId: string,
@@ -558,29 +494,22 @@ function standardizeContract(
   validationStatus: string,
   validationErrors: string[]
 ) {
-  if (parsedOutput.agent_id && parsedOutput.outputs) {
-    if (deterministicMath) {
-      parsedOutput.outputs.deterministic_math = deterministicMath;
-    }
-    parsedOutput.validation_status = validationStatus;
-    parsedOutput.errors = validationErrors;
-    return parsedOutput;
-  }
 
   return {
     agent_id: agentId,
     run_id: runId,
     timestamp: timestamp,
     timezone: 'Africa/Cairo',
-    source: inputs.source || 'Authorized Financial Feed / NEXORA Gateway',
+    source: inputs.source || 'UNVERIFIED_INPUT',
     inputs: inputs,
+    draft_revision: digest({ ...parsedOutput, ...(deterministicMath ? { deterministic_math: deterministicMath } : {}) }),
     outputs: {
       ...parsedOutput,
       ...(deterministicMath ? { deterministic_math: deterministicMath } : {}),
     },
     confidence_or_uncertainty_notes:
       parsedOutput.confidence_or_uncertainty_notes ||
-      'تم التحقق من البيانات وتطبيع التوقيت وفقاً لمعايير نكسورا ماركتس.',
+      'يتطلب المصدر والمحتوى مراجعة مستقلة قبل النشر.',
     validation_status: validationStatus,
     human_approval_status: agentId === 'risk_guardian_agent' && deterministicMath && !deterministicMath.isCompliant ? 'BLOCKED_BY_RISK_RULE' : 'PENDING_HUMAN_APPROVAL',
     errors: validationErrors,
@@ -602,7 +531,7 @@ async function startServer() {
 
   app.use(vite.middlewares);
 
-  app.listen(port, '0.0.0.0', () => {
+  app.listen(port, process.env.HOST || '127.0.0.1', () => {
     console.log(`🚀 NEXORA Hardened SQLite Server running at http://0.0.0.0:${port}`);
   });
 }

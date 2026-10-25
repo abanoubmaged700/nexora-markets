@@ -1,0 +1,668 @@
+{
+  "name": "NEXORA - News Engine v1 - approval required",
+  "nodes": [
+    {
+      "id": "official-rss-polling",
+      "name": "Official RSS polling",
+      "type": "n8n-nodes-base.rssFeedReadTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "feedUrl": "https://www.federalreserve.gov/feeds/press_monetary.xml",
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyHour"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "validate-official-source",
+      "name": "Validate official source",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        250,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const out=[];\nfor (let i=0;i<items.length;i++) {\n  const v=items[i].json;\n  const title=String(v.title||'').trim();\n  const link=String(v.link||'').trim();\n  const stamp=String(v.isoDate||v.pubDate||'');\n  const date=new Date(stamp);\n  let u;\n  try { u=new URL(link); } catch { continue; }\n  if (u.protocol!=='https:' || u.hostname!=='www.federalreserve.gov') continue;\n  if (!title || !Number.isFinite(date.getTime())) continue;\n  const age=Date.now()-date.getTime();\n  if (age < -3600000 || age > 14*86400000) continue;\n  const sourceId=link.split('#')[0].split('?')[0];\n  const cairo=new Intl.DateTimeFormat('ar-EG',{timeZone:'Africa/Cairo',dateStyle:'medium',timeStyle:'short'}).format(date);\n  out.push({json:{source_id:sourceId,title,source_url:link,event_utc:date.toISOString(),source_utc:date.toISOString(),source_cairo:cairo,verification_status:'official_rss_metadata',source_name:'Federal Reserve Board',summary:String(v.contentSnippet||v.content||'').replace(/<[^>]*>/g,' ').slice(0,1000)},pairedItem:{item:i}});\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "check-source-id",
+      "name": "Check source ID",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        510,
+        0
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "NEXORA_News_Log"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "source_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.source_id }}"
+            }
+          ]
+        },
+        "limit": 1
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "keep-unseen-items",
+      "name": "Keep unseen items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        770,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const out=[];\nfor (let i=0;i<items.length;i++) {\n  if (items[i].json.id) continue;\n  const source=$('Validate official source').itemMatching(i).json;\n  out.push({json:source,pairedItem:{item:i}});\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "draft-with-gemini",
+      "name": "Draft with Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1020,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({contents:[{parts:[{text:'Write a short Arabic financial news draft using only this official source title and summary. Do not invent numbers, prices, effects, or trading recommendations. Clearly state uncertainty. Title: ' + $json.title + '\\nSummary: ' + $json.summary + '\\nSource UTC: ' + $json.source_utc}]}],generationConfig:{temperature:0.2,maxOutputTokens:350}}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "compose-attributed-draft",
+      "name": "Compose attributed draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const out=[];\nfor (let i=0;i<items.length;i++) {\n  const source=$('Keep unseen items').itemMatching(i).json;\n  const generated=items[i].json.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join(' ').trim()||'';\n  if (!generated || generated.length>1600) throw new Error('Gemini returned an empty or oversized draft');\n  const draft='NEXORA Markets 🔱\\n\\n'+generated+'\\n\\nالمصدر: '+source.source_name+'\\n'+source.source_url+'\\nوقت المصدر (القاهرة): '+source.source_cairo+'\\n\\nمحتوى إخباري تعليمي، وليس نصيحة استثمارية.';\n  const usage=items[i].json.usageMetadata||{};\n  out.push({json:{...source,draft,status:'pending',created_utc:new Date().toISOString(),gemini_input_tokens:String(usage.promptTokenCount??''),gemini_output_tokens:String(usage.candidatesTokenCount??''),gemini_model:'gemini-3.8-flash'},pairedItem:{item:i}});\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "record-pending-draft",
+      "name": "Record pending draft",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1530,
+        0
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "NEXORA_News_Log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "source_id": "={{ $json.source_id }}",
+            "title": "={{ $json.title }}",
+            "source_url": "={{ $json.source_url }}",
+            "event_utc": "={{ $json.event_utc }}",
+            "source_utc": "={{ $json.source_utc }}",
+            "source_cairo": "={{ $json.source_cairo }}",
+            "verification_status": "={{ $json.verification_status }}",
+            "draft": "={{ $json.draft }}",
+            "status": "pending",
+            "created_utc": "={{ $json.created_utc }}",
+            "telegram_message_id": "",
+            "gemini_input_tokens": "={{ $json.gemini_input_tokens }}",
+            "gemini_output_tokens": "={{ $json.gemini_output_tokens }}",
+            "gemini_model": "={{ $json.gemini_model }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "source_id",
+              "displayName": "source_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_url",
+              "displayName": "source_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_utc",
+              "displayName": "event_utc",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_utc",
+              "displayName": "source_utc",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_cairo",
+              "displayName": "source_cairo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "verification_status",
+              "displayName": "verification_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "draft",
+              "displayName": "draft",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_utc",
+              "displayName": "created_utc",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "telegram_message_id",
+              "displayName": "telegram_message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "gemini_input_tokens",
+              "displayName": "gemini_input_tokens",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "gemini_output_tokens",
+              "displayName": "gemini_output_tokens",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "gemini_model",
+              "displayName": "gemini_model",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "owner-approval-on-local-browser",
+      "name": "Owner approval on local browser",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1790,
+        0
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendAndWait",
+        "chatId": "REPLACE_WITH_PRIVATE_CHAT_ID",
+        "message": "={{ $('Compose attributed draft').item.json.draft }}",
+        "responseType": "approval",
+        "chatApproval": false,
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "approveLabel": "Approve",
+            "disapproveLabel": "Decline"
+          }
+        },
+        "options": {
+          "appendAttribution": false
+        }
+      }
+    },
+    {
+      "id": "explicit-approval?",
+      "name": "Explicit approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2040,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "approved",
+              "leftValue": "={{ $json.data.approved }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "claim-publication-once",
+      "name": "Claim publication once",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2290,
+        -120
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "NEXORA_News_Log"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "source_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Compose attributed draft').item.json.source_id }}"
+            },
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "pending"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "publishing"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "publish-approved-draft",
+      "name": "Publish approved draft",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2540,
+        -120
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "REPLACE_WITH_CHANNEL_ID",
+        "text": "={{ $('Compose attributed draft').item.json.draft }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      }
+    },
+    {
+      "id": "log-publication",
+      "name": "Log publication",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2790,
+        -120
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "NEXORA_News_Log"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "source_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Compose attributed draft').item.json.source_id }}"
+            },
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "publishing"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "published",
+            "telegram_message_id": "={{ String($json.message_id || '') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "telegram_message_id",
+              "displayName": "telegram_message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "log-decline",
+      "name": "Log decline",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2290,
+        160
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "NEXORA_News_Log"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "source_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Compose attributed draft').item.json.source_id }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "declined"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Official RSS polling": {
+      "main": [
+        [
+          {
+            "node": "Validate official source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate official source": {
+      "main": [
+        [
+          {
+            "node": "Check source ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check source ID": {
+      "main": [
+        [
+          {
+            "node": "Keep unseen items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep unseen items": {
+      "main": [
+        [
+          {
+            "node": "Draft with Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft with Gemini": {
+      "main": [
+        [
+          {
+            "node": "Compose attributed draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose attributed draft": {
+      "main": [
+        [
+          {
+            "node": "Record pending draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record pending draft": {
+      "main": [
+        [
+          {
+            "node": "Owner approval on local browser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Owner approval on local browser": {
+      "main": [
+        [
+          {
+            "node": "Explicit approval?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Explicit approval?": {
+      "main": [
+        [
+          {
+            "node": "Claim publication once",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log decline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim publication once": {
+      "main": [
+        [
+          {
+            "node": "Publish approved draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish approved draft": {
+      "main": [
+        [
+          {
+            "node": "Log publication",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Africa/Cairo",
+    "executionOrder": "v1",
+    "saveExecutionProgress": true
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}
