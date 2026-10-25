@@ -30,11 +30,13 @@ export const TabExecutionLogs: React.FC = () => {
       const res = await fetch(`/api/executions/${runId}/approval`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, editorId: 'Editor_Lead_Admin' }),
+        body: JSON.stringify({ action, revision: logs.find(l => l.run_id === runId)?.contract?.draft_revision }),
       });
       const data = await res.json();
       if (data.success) {
         fetchLogs();
+      } else {
+        window.alert('لم تُحفظ الموافقة: ' + (data.error || res.status));
       }
     } catch (err) {
       console.error('Failed to update approval status', err);
