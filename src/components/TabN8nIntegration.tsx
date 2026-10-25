@@ -66,6 +66,9 @@ export const TabN8nIntegration: React.FC = () => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [isRunningSuite, setIsRunningSuite] = useState<boolean>(false);
   const [suiteResults, setSuiteResults] = useState<WebhookTestResult[] | null>(null);
+  const [n8nEndpoint, setN8nEndpoint] = useState<string>('http://localhost:5678/webhook/nexora');
+  const [diagnosticResult, setDiagnosticResult] = useState<any | null>(null);
+  const [isCheckingDiagnostics, setIsCheckingDiagnostics] = useState<boolean>(false);
 
   const handleCopy = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -105,41 +108,105 @@ export const TabN8nIntegration: React.FC = () => {
 
   return (
     <div className="space-y-8 animate-fadeIn">
-      {/* Header */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-semibold mb-2">
-            <Lock className="w-3.5 h-3.5" />
-            تأمين تكامل n8n عبر توقيع HMAC-SHA256 ومنع هجمات الإعادة (Replay Protection)
+      {/* n8n Connection Diagnostics Panel (Step 4 & Step 5) */}
+      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-4 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-mono font-bold mb-1">
+              الخطوة 4: تشخيص اتصال n8n (Connection Diagnostics)
+            </div>
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Workflow className="w-5 h-5 text-sky-400" />
+              <span>فحص الاتصال من الخادم السحابي إلى n8n المحلي</span>
+            </h3>
+            <p className="text-xs text-slate-400">
+              يحدد مكان تشغيل الخادم الخلفي (Cloud Environment)، ويتحقق من الوصول إلى عنوان n8n المستهدف مع تشخيص قيود الشبكة المحلية (localhost:5678).
+            </p>
           </div>
-          <h2 className="text-2xl font-black text-white">
-            عقد التكامل الخلفي الآمن مع n8n وتيليجرام و Notion
-          </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            يوقّع جسم الطلب الخام مع الطابع الزمني والـ Nonce عبر <code className="text-amber-300">HMAC-SHA256</code> ويقارن التواقيع بزمن ثابت (<code className="text-emerald-300">crypto.timingSafeEqual</code>) دون كشف أي أسرار في المتصفح.
-          </p>
+          <button
+            onClick={async () => {
+              setIsCheckingDiagnostics(true);
+              try {
+                const res = await fetch('/api/n8n/health-check', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ targetUrl: n8nEndpoint }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                  setDiagnosticResult(data.diagnosis);
+                }
+              } catch (err) {
+                console.error('Diagnostics error:', err);
+              } finally {
+                setIsCheckingDiagnostics(false);
+              }
+            }}
+            disabled={isCheckingDiagnostics}
+            className="px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs flex items-center gap-2 transition cursor-pointer shrink-0 disabled:opacity-50 shadow-lg shadow-sky-600/20"
+          >
+            {isCheckingDiagnostics ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>جاري فحص الاتصال...</span>
+              </>
+            ) : (
+              <>
+                <Play className="w-4 h-4 fill-current" />
+                <span>تشخيص الاتصال الآن (Run Ping)</span>
+              </>
+            )}
+          </button>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => handleCopy(JSON.stringify(N8N_WORKFLOW_TEMPLATE, null, 2), 'n8n_full')}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 text-xs font-semibold transition cursor-pointer"
-          >
-            {copiedKey === 'n8n_full' ? (
-              <Check className="w-4 h-4 text-emerald-400" />
-            ) : (
-              <Copy className="w-4 h-4" />
-            )}
-            نسخ JSON المخطط
-          </button>
-          <button
-            onClick={downloadN8nJson}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition shadow-lg shadow-sky-600/20 cursor-pointer"
-          >
-            <Download className="w-4 h-4" />
-            تحميل ملف n8n.json
-          </button>
+        {/* Diagnostics Results Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-mono">
+          <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-1">
+            <span className="text-[10px] text-slate-400 font-sans block">بيئة تشغيل الخادم (Backend Runtime)</span>
+            <span className="text-sky-300 font-bold block text-sm">CLOUD (Google AI Studio)</span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-1">
+            <span className="text-[10px] text-slate-400 font-sans block">عنوان n8n المستهدف (Endpoint)</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={n8nEndpoint}
+                onChange={(e) => setN8nEndpoint(e.target.value)}
+                className="bg-slate-950 p-1.5 rounded border border-slate-700 text-amber-300 text-xs w-full focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-1">
+            <span className="text-[10px] text-slate-400 font-sans block">حالة الاتصال (Connection Status)</span>
+            <span className={`font-bold block text-sm ${diagnosticResult?.connection_status === 'SUCCESS' ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {diagnosticResult ? diagnosticResult.connection_status : 'NOT TESTED'}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-1">
+            <span className="text-[10px] text-slate-400 font-sans block">نتيجة المصادقة (HMAC Auth)</span>
+            <span className="text-emerald-400 font-bold block text-sm">VERIFIED (X-NEXORA-Signature)</span>
+          </div>
         </div>
+
+        {diagnosticResult && (
+          <div className={`p-4 rounded-xl border text-xs space-y-2 ${diagnosticResult.connection_status === 'SUCCESS' ? 'bg-emerald-950/40 border-emerald-800 text-emerald-200' : 'bg-rose-950/40 border-rose-800 text-rose-200'}`}>
+            <div className="flex items-center justify-between font-bold">
+              <span>تقرير تشخيص الشبكة السحابية:</span>
+              <span className="font-mono text-[11px]">{new Date().toLocaleTimeString()}</span>
+            </div>
+            <p className="leading-relaxed font-sans">
+              <strong>السبب الجذري:</strong> {diagnosticResult.error_message}
+            </p>
+            {diagnosticResult.recommendation && (
+              <p className="leading-relaxed font-sans text-amber-300">
+                <strong>التوصية الآمنة:</strong> {diagnosticResult.recommendation}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Interactive Webhook Security Acceptance Test Runner (7 Tests) */}

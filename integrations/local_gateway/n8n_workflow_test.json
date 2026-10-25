@@ -1,0 +1,76 @@
+{
+  "name": "NEXORA - Telegram Connection Test v1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nexora-publish",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "id": "webhook_node_1",
+      "name": "Webhook Gateway Receiver"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify approval status and format message for Telegram\nconst input = $input.first().json;\nif (input.human_approval_status !== 'APPROVED') {\n  throw new Error('Publication blocked: Content is not APPROVED.');\n}\n\nreturn [{\n  json: {\n    chat_id: $env.TELEGRAM_EDITORIAL_CHAT_ID,\n    text: `🚀 نكسورا ماركتس | نشر معتمد\\n\\n${input.outputs?.news_draft_ar || input.outputs?.telegram_post || 'محتوى معتمد'}\\n\\nRun ID: ${input.run_id}`,\n    parse_mode: 'Markdown'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300],
+      "id": "code_node_approval",
+      "name": "Approval & Formatting Check"
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [690, 300],
+      "id": "telegram_node_1",
+      "name": "Telegram TEST Channel",
+      "credentials": {
+        "telegramApi": {
+          "id": "nexora_telegram_test_cred",
+          "name": "Telegram Test Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Gateway Receiver": {
+      "main": [
+        [
+          {
+            "node": "Approval & Formatting Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approval & Formatting Check": {
+      "main": [
+        [
+          {
+            "node": "Telegram TEST Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

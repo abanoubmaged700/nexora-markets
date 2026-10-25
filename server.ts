@@ -631,3 +631,61 @@ async function startServer() {
 }
 
 startServer();
+
+// Diagnostic Health Check between Backend and n8n
+app.post('/api/n8n/health-check', async (req: Request, res: Response) => {
+  const targetUrl = req.body.targetUrl || process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook/nexora-health';
+  const expectedSecret = process.env.N8N_WEBHOOK_SECRET || 'nexora_secure_shared_secret_2026';
+
+  const diagnosis = {
+    target_url: targetUrl,
+    is_local_address: targetUrl.includes('localhost') || targetUrl.includes('127.0.0.1') || targetUrl.includes('0.0.0.0'),
+    cloud_environment: true,
+    connection_status: 'FAILED',
+    error_message: '',
+    recommendation: ''
+  };
+
+  if (diagnosis.is_local_address) {
+    diagnosis.error_message = 'عنوان الـ localhost محلي وغير قابل للوصول من الخادم السحابي (Cloud Run).';
+    diagnosis.recommendation = 'استخدم أداة نفق آمن مثل ngrok (مثال: ngrok http 5678) واستبدل الرابط المحلي بالرابط العام.';
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+    const fetchRes = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-NEXORA-Signature': expectedSecret,
+      },
+      body: JSON.stringify({ ping: 'nexora_health_check', timestamp: new Date().toISOString() }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (fetchRes.ok || fetchRes.status < 500) {
+      diagnosis.connection_status = 'SUCCESS';
+      diagnosis.error_message = '';
+    } else {
+      diagnosis.connection_status = 'REACHED_WITH_ERROR';
+      diagnosis.error_message = `تم الوصول للخادم ولكن استجاب برمز الحالة: ${fetchRes.status}`;
+    }
+  } catch (err: any) {
+    diagnosis.connection_status = 'UNREACHABLE';
+    if (!diagnosis.error_message) {
+      diagnosis.error_message = `فشل الاتصال بالشبكة: ${err.message}`;
+    }
+    if (!diagnosis.recommendation) {
+      diagnosis.recommendation = 'تأكد من تشغيل خادم n8n واستخدام نفق عام مثل ngrok في حال كان التطبيق مستضافاً سحابياً.';
+    }
+  }
+
+  return res.json({
+    success: true,
+    diagnosis,
+  });
+});

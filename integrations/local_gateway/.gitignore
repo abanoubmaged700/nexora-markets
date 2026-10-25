@@ -1,0 +1,15 @@
+# Node modules
+node_modules/
+
+# Environment variables and secrets
+.env
+
+# SQLite persistence files
+*.sqlite
+*.sqlite-*
+gateway_persistence.sqlite
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+*.log

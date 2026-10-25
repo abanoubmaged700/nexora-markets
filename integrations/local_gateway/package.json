@@ -1,0 +1,15 @@
+{
+  "name": "nexora-local-webhook-gateway",
+  "version": "1.0.0",
+  "description": "Secure Local Windows Webhook Gateway for NEXORA Markets n8n integration",
+  "type": "module",
+  "main": "gateway.js",
+  "scripts": {
+    "start": "node gateway.js",
+    "test": "node test_gateway.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "sql.js": "^1.12.0"
+  }
+}
