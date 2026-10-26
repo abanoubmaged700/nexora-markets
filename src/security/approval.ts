@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { approvalReceipt } from './approvalReceipt.ts';
 
 export const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export function reviewerIdentity(header: unknown, env: Record<string, string | undefined>) {
@@ -52,7 +53,8 @@ export function approvalHandler(getDb: () => any, persist: () => void) {
       db.run('INSERT INTO approval_decisions (run_id, agent_id, decision, editor_id, timestamp, notes) VALUES (?, ?, ?, ?, ?, ?)', [req.params.runId, agent, action, res.locals.reviewer, contract.approval.timestamp, revision]);
       db.run('COMMIT'); transaction = false;
       persist(); // Throws and invalidates the DB on disk failure; never acknowledge an unpersisted approval.
-      return res.json({ success: true, run_id: req.params.runId, new_approval_status: contract.human_approval_status });
+      const receipt = action === 'APPROVE' ? approvalReceipt(req.params.runId, revision, process.env.NEXORA_APPROVAL_SIGNING_SECRET) : null;
+      return res.json({ success: true, run_id: req.params.runId, new_approval_status: contract.human_approval_status, approval_receipt: receipt, publication_ready: Boolean(receipt) });
     } catch {
       if (transaction) db.run('ROLLBACK');
       return res.status(503).json({ success: false, error: 'APPROVAL_PERSISTENCE_FAILED' });

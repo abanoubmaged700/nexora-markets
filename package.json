@@ -11,7 +11,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test:approval": "node --test --test-isolation=none tests/approval.test.ts",
-    "test": "node --test --test-isolation=none tests/approval.test.ts tests/contract.test.ts tests/persistence.test.ts tests/diagnostics.test.ts"
+    "test": "node --test --test-isolation=none tests/approval.test.ts tests/contract.test.ts tests/persistence.test.ts tests/diagnostics.test.ts tests/gateway.test.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

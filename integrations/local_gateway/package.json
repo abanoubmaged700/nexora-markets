@@ -6,7 +6,7 @@
   "main": "gateway.js",
   "scripts": {
     "start": "node gateway.js",
-    "test": "node test_gateway.js"
+    "test": "node --test ../../tests/gateway.test.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

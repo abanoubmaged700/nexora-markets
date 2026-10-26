@@ -1,24 +1,10 @@
-# NEXORA Gateway Setup & Startup Script for Windows PowerShell
-# Requires Node.js installed
-
-Write-Host "🔒 Setting up NEXORA Secure Local Webhook Gateway..." -ForegroundColor Cyan
-
-# 1. Create .env file if not exists
-$envPath = ".env"
-if (-not (Test-Path $envPath)) {
-    Write-Host "Creating default .env configuration..." -ForegroundColor Yellow
-    @"
-GATEWAY_PORT=3001
-N8N_TARGET_URL=http://localhost:5678/webhook/nexora-publish
-N8N_WEBHOOK_SECRET=nexora_secure_random_production_secret_$(Get-Random -Minimum 100000 -Maximum 999999)
-"@ | Out-File -Encoding utf8 $envPath
+# NEXORA local gateway preparation. Run from the repository root.
+# Configure real secrets in the process environment or an untracked local file.
+$ErrorActionPreference = 'Stop'
+if (-not (Test-Path -LiteralPath 'package-lock.json')) {
+    throw 'Run setup.ps1 from the NEXORA repository root.'
 }
-
-# 2. Install dependencies
-Write-Host "Installing dependencies (express, sql.js)..." -ForegroundColor Yellow
-npm init -y
-npm install express sql.js
-
-Write-Host "✅ Setup completed successfully!" -ForegroundColor Green
-Write-Host "To start the gateway, run: node gateway.js" -ForegroundColor Cyan
-Write-Host "To expose securely via ngrok, run: ngrok http 3001" -ForegroundColor Cyan
+npm ci
+if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' }
+Write-Host 'Dependencies installed. Set N8N_WEBHOOK_SECRET and NEXORA_APPROVAL_SIGNING_SECRET privately before starting the gateway.'
+Write-Host 'Run the isolated checks with npm test. Keep the gateway on 127.0.0.1 until delivery is verified.'
