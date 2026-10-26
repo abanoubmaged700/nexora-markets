@@ -106,13 +106,15 @@ function runMigrations() {
 }
 
 export function saveDatabaseToDisk() {
-  if (!db) return;
+  if (!db) throw new Error('DATABASE_UNAVAILABLE');
+  const temporary = dbPath + '.tmp';
   try {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(dbPath, buffer);
-  } catch (err) {
-    console.error('Failed to save SQLite database to disk:', err);
+    fs.writeFileSync(temporary, Buffer.from(db.export()), { mode: 0o600, flush: true });
+    fs.renameSync(temporary, dbPath);
+  } catch {
+    // Fail closed until restart reloads the last durable snapshot.
+    db.close(); db = null;
+    throw new Error('DATABASE_PERSISTENCE_FAILED');
   }
 }
 

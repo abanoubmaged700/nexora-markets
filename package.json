@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "start": "tsx server.ts",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:approval": "node --test --test-isolation=none tests/approval.test.ts",
+    "test": "node --test --test-isolation=none tests/approval.test.ts tests/contract.test.ts tests/persistence.test.ts tests/diagnostics.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -29,7 +31,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.2",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
