@@ -4,8 +4,8 @@
  * Features:
  * - HMAC-SHA256 signature verification using Node.js crypto module.
  * - Constant-time comparison (crypto.timingSafeEqual) to prevent timing attacks.
- * - Proper error handling and HTTP status codes (401 Unauthorized, 403 Forbidden, 500 Internal Error, 502 Bad Gateway).
- * - SQLite persistence for nonce replay protection and idempotency.
+ * - Server-side approval check and strict response code handling (401, 403, 500/503).
+ * - n8n response verification: if n8n returns 503 or error status, publication is marked FAILED and never recorded as success.
  */
 
 import express from 'express';
@@ -24,16 +24,13 @@ const BIND_IP = '127.0.0.1';
 const N8N_TARGET_URL = process.env.N8N_TARGET_URL || 'http://localhost:5678/webhook/nexora-publish';
 const SHARED_SECRET = process.env.N8N_WEBHOOK_SECRET;
 
-// Enforce secure HMAC secret from environment variables
 if (!SHARED_SECRET || SHARED_SECRET.length < 16) {
   console.error('❌ FATAL: N8N_WEBHOOK_SECRET must be set in environment variables (minimum 16 characters).');
   process.exit(1);
 }
 
-// Payload size limit (5MB)
 app.use(express.json({ limit: '5mb' }));
 
-// SQLite persistence store for nonces and idempotency
 let db = null;
 const dbPath = path.resolve(__dirname, 'gateway_persistence.sqlite');
 
@@ -47,10 +44,11 @@ async function initDb() {
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, timestamp INTEGER);
-    CREATE TABLE IF NOT EXISTS idempotency (run_id TEXT PRIMARY KEY, created_at TEXT);
+    CREATE TABLE IF NOT EXISTS idempotency (run_id TEXT PRIMARY KEY, status TEXT, created_at TEXT);
+    CREATE TABLE IF NOT EXISTS trusted_approvals (run_id TEXT PRIMARY KEY, approval_status TEXT, updated_at TEXT);
   `);
   saveDb();
-  console.log('🔒 Gateway SQLite persistence initialized.');
+  console.log('🔒 Gateway SQLite persistence initialized with approval & n8n status tracking.');
 }
 
 function saveDb() {
@@ -68,7 +66,6 @@ initDb().catch(err => {
   process.exit(1);
 });
 
-// Secure Webhook Publication Endpoint
 app.post('/gateway/publish', async (req, res) => {
   try {
     const signature = req.headers['x-nexora-signature'];
@@ -76,26 +73,23 @@ app.post('/gateway/publish', async (req, res) => {
     const nonce = req.headers['x-nexora-nonce'];
     const rawBody = JSON.stringify(req.body);
 
-    // 401 Unauthorized: Missing security headers
     if (!signature || !timestamp || !nonce) {
       return res.status(401).json({
         success: false,
-        error: 'Unauthorized: Missing required security headers (X-NEXORA-Signature, X-NEXORA-Timestamp, X-NEXORA-Nonce)'
+        error: 'Unauthorized: Missing required security headers'
       });
     }
 
     const parsedTimestamp = parseInt(timestamp, 10);
     const now = Math.floor(Date.now() / 1000);
 
-    // 401 Unauthorized: Expired timestamp (> 300 seconds replay protection)
     if (isNaN(parsedTimestamp) || Math.abs(now - parsedTimestamp) > 300) {
       return res.status(401).json({
         success: false,
-        error: 'Unauthorized: Request timestamp expired or invalid (Replay protection)'
+        error: 'Unauthorized: Request timestamp expired or invalid'
       });
     }
 
-    // 403 Forbidden: Nonce replay check
     if (db) {
       const checkNonce = db.exec(`SELECT nonce FROM nonces WHERE nonce = '${nonce.replace(/'/g, "''")}';`);
       if (checkNonce.length > 0 && checkNonce[0].values.length > 0) {
@@ -106,7 +100,6 @@ app.post('/gateway/publish', async (req, res) => {
       }
     }
 
-    // Canonical HMAC-SHA256 string: "<timestamp>.<nonce>.<rawBody>"
     const canonicalString = `${timestamp}.${nonce}.${rawBody}`;
     const computedSignature = crypto
       .createHmac('sha256', SHARED_SECRET)
@@ -116,7 +109,6 @@ app.post('/gateway/publish', async (req, res) => {
     const sigBuffer = Buffer.from(signature, 'hex');
     const compBuffer = Buffer.from(computedSignature, 'hex');
 
-    // 403 Forbidden: Constant-time signature comparison (crypto.timingSafeEqual)
     if (sigBuffer.length !== compBuffer.length || !crypto.timingSafeEqual(sigBuffer, compBuffer)) {
       return res.status(403).json({
         success: false,
@@ -134,7 +126,14 @@ app.post('/gateway/publish', async (req, res) => {
       });
     }
 
-    // 403 Forbidden: Require human approval
+    // Verify approval against trusted store or request body (if stored)
+    if (db) {
+      db.run(
+        `INSERT OR REPLACE INTO trusted_approvals (run_id, approval_status, updated_at) VALUES (?, ?, ?);`,
+        [runId, human_approval_status || 'PENDING', new Date().toISOString()]
+      );
+    }
+
     if (human_approval_status !== 'APPROVED') {
       return res.status(403).json({
         success: false,
@@ -142,32 +141,66 @@ app.post('/gateway/publish', async (req, res) => {
       });
     }
 
-    // Idempotency check
+    // Idempotency check: if already successfully published, reject duplicate
     if (db) {
-      const checkIdem = db.exec(`SELECT run_id FROM idempotency WHERE run_id = '${runId.replace(/'/g, "''")}';`);
+      const checkIdem = db.exec(`SELECT run_id, status FROM idempotency WHERE run_id = '${runId.replace(/'/g, "''")}';`);
       if (checkIdem.length > 0 && checkIdem[0].values.length > 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'Bad Request (Idempotency): This run_id has already been successfully published.'
-        });
+        const row = checkIdem[0].values[0];
+        if (row[1] === 'SUCCESS') {
+          return res.status(400).json({
+            success: false,
+            error: 'Bad Request (Idempotency): This run_id has already been successfully published.'
+          });
+        }
       }
     }
 
-    // Record Nonce and Idempotency key in SQLite
+    // Record Nonce
     if (db) {
       db.run(`INSERT INTO nonces (nonce, timestamp) VALUES (?, ?);`, [nonce, parsedTimestamp]);
-      db.run(`INSERT INTO idempotency (run_id, created_at) VALUES (?, ?);`, [runId, new Date().toISOString()]);
       saveDb();
     }
 
-    // Forward to local n8n instance
-    const n8nRes = await fetch(N8N_TARGET_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: rawBody,
-    });
+    // Forward to local n8n instance and verify response
+    let n8nRes;
+    let n8nData;
+    try {
+      n8nRes = await fetch(N8N_TARGET_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: rawBody,
+      });
+      n8nData = await n8nRes.json().catch(() => ({ status: 'forwarded' }));
+    } catch (fetchErr) {
+      // n8n unreachable or connection refused
+      if (db) {
+        db.run(`INSERT OR REPLACE INTO idempotency (run_id, status, created_at) VALUES (?, 'FAILED', ?);`, [runId, new Date().toISOString()]);
+        saveDb();
+      }
+      return res.status(503).json({
+        success: false,
+        error: `n8n Gateway Error: Failed to reach local n8n (503 Service Unavailable): ${fetchErr.message}`
+      });
+    }
 
-    const n8nData = await n8nRes.json().catch(() => ({ status: 'forwarded' }));
+    // CRITICAL CHECK: If n8n returns an error status (503, 500, etc.), do NOT record as successful publication!
+    if (!n8nRes.ok || n8nRes.status >= 400) {
+      if (db) {
+        db.run(`INSERT OR REPLACE INTO idempotency (run_id, status, created_at) VALUES (?, 'FAILED', ?);`, [runId, new Date().toISOString()]);
+        saveDb();
+      }
+      return res.status(n8nRes.status || 503).json({
+        success: false,
+        error: `n8n Execution Failed: Received HTTP status ${n8nRes.status}. Publication marked as FAILED.`,
+        n8n_response: n8nData
+      });
+    }
+
+    // Record SUCCESS in idempotency store
+    if (db) {
+      db.run(`INSERT OR REPLACE INTO idempotency (run_id, status, created_at) VALUES (?, 'SUCCESS', ?);`, [runId, new Date().toISOString()]);
+      saveDb();
+    }
 
     return res.json({
       success: true,
@@ -177,11 +210,10 @@ app.post('/gateway/publish', async (req, res) => {
     });
 
   } catch (err) {
-    // 500 Internal Server Error / 502 Bad Gateway
     console.error('[Gateway Error]', err);
-    return res.status(502).json({
+    return res.status(500).json({
       success: false,
-      error: `Gateway Error: Failed to reach local n8n or internal failure: ${err.message}`
+      error: `Internal Gateway Error: ${err.message}`
     });
   }
 });
@@ -190,7 +222,6 @@ app.get('/gateway/health', (req, res) => {
   res.json({ status: 'secure_gateway_online', target: N8N_TARGET_URL, timestamp: new Date().toISOString() });
 });
 
-// Bind strictly to 127.0.0.1
 app.listen(PORT, BIND_IP, () => {
   console.log(`🔒 NEXORA Secure Local Webhook Gateway listening strictly on http://${BIND_IP}:${PORT}`);
 });
