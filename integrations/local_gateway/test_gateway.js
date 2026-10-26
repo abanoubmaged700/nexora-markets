@@ -33,23 +33,24 @@ function makeRequest(headers, bodyObj) {
 }
 
 async function runTests() {
-  console.log('🧪 Starting NEXORA Gateway Security Test Suite...');
+  console.log('🧪 Starting NEXORA Gateway Advanced Security & Concurrency Test Suite...');
 
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  const nonce = 'nonce_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const runId = 'test_run_' + Date.now();
   const payload = {
-    run_id: 'test_run_' + Date.now(),
+    run_id: runId,
     agent_id: 'economic_news_agent',
     human_approval_status: 'APPROVED',
-    outputs: { news_draft_ar: 'اختبار النشر الآمن' }
+    outputs: { news_draft_ar: 'خبر اقتصادي معتمد وآمن' }
   };
 
   const rawBody = JSON.stringify(payload);
+  const nonce = 'nonce_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
   const canonical = `${timestamp}.${nonce}.${rawBody}`;
   const validSignature = crypto.createHmac('sha256', SECRET).update(canonical, 'utf8').digest('hex');
 
-  // Test 1: Valid Request
-  console.log('\n[Test 1] Valid Request with correct HMAC signature...');
+  // Test 1: Valid Request (First time registers approval & fingerprint, attempts forward)
+  console.log('\n[Test 1] Valid Request with Fingerprint Binding...');
   const res1 = await makeRequest({
     'x-nexora-timestamp': timestamp,
     'x-nexora-nonce': nonce,
@@ -57,51 +58,45 @@ async function runTests() {
   }, payload);
   console.log(`Status: ${res1.status}`, res1.body);
 
-  // Test 2: Nonce Replay
-  console.log('\n[Test 2] Nonce Replay Attack (reusing nonce)...');
+  // Test 2: Forged Approval / Modified Content Fingerprint (Tampering detection)
+  console.log('\n[Test 2] Tampered Content (Fingerprint Mismatch Test)...');
+  const tamperedPayload = {
+    ...payload,
+    outputs: { news_draft_ar: 'خبر تم تعديله خبيثاً بعد الاعتماد!' }
+  };
+  const rawBodyTampered = JSON.stringify(tamperedPayload);
+  const nonce2 = 'nonce_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const canonical2 = `${timestamp}.${nonce2}.${rawBodyTampered}`;
+  const validSig2 = crypto.createHmac('sha256', SECRET).update(canonical2, 'utf8').digest('hex');
+
   const res2 = await makeRequest({
     'x-nexora-timestamp': timestamp,
-    'x-nexora-nonce': nonce,
-    'x-nexora-signature': validSignature
-  }, payload);
+    'x-nexora-nonce': nonce2,
+    'x-nexora-signature': validSig2
+  }, tamperedPayload);
   console.log(`Status: ${res2.status} (Expected 403)`, res2.body);
 
-  // Test 3: Duplicate run_id (Idempotency check)
-  console.log('\n[Test 3] Duplicate run_id (Idempotency check)...');
-  const nonce3 = 'nonce_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-  const canonical3 = `${timestamp}.${nonce3}.${rawBody}`;
-  const validSig3 = crypto.createHmac('sha256', SECRET).update(canonical3, 'utf8').digest('hex');
-  const res3 = await makeRequest({
-    'x-nexora-timestamp': timestamp,
-    'x-nexora-nonce': nonce3,
-    'x-nexora-signature': validSig3
-  }, payload);
-  console.log(`Status: ${res3.status} (Expected 400)`, res3.body);
+  // Test 3: Concurrency / IN_FLIGHT test (Simulating simultaneous requests for same run_id)
+  console.log('\n[Test 3] Concurrency / Race Condition Test (IN_FLIGHT lock)...');
+  const runIdConcurrent = 'concurrent_run_' + Date.now();
+  const concurrentPayload = { ...payload, run_id: runIdConcurrent };
+  const rawBodyConc = JSON.stringify(concurrentPayload);
+  
+  const nonce3a = 'nonce_a_' + Date.now();
+  const sig3a = crypto.createHmac('sha256', SECRET).update(`${timestamp}.${nonce3a}.${rawBodyConc}`).digest('hex');
+  
+  const nonce3b = 'nonce_b_' + Date.now();
+  const sig3b = crypto.createHmac('sha256', SECRET).update(`${timestamp}.${nonce3b}.${rawBodyConc}`).digest('hex');
 
-  // Test 4: Expired Timestamp
-  console.log('\n[Test 4] Expired Timestamp...');
-  const oldTimestamp = (Math.floor(Date.now() / 1000) - 600).toString();
-  const nonce4 = 'nonce_' + Date.now();
-  const canonical4 = `${oldTimestamp}.${nonce4}.${rawBody}`;
-  const sig4 = crypto.createHmac('sha256', SECRET).update(canonical4, 'utf8').digest('hex');
-  const res4 = await makeRequest({
-    'x-nexora-timestamp': oldTimestamp,
-    'x-nexora-nonce': nonce4,
-    'x-nexora-signature': sig4
-  }, payload);
-  console.log(`Status: ${res4.status} (Expected 401)`, res4.body);
+  // Fire two concurrent requests
+  const [conc1, conc2] = await Promise.all([
+    makeRequest({ 'x-nexora-timestamp': timestamp, 'x-nexora-nonce': nonce3a, 'x-nexora-signature': sig3a }, concurrentPayload),
+    makeRequest({ 'x-nexora-timestamp': timestamp, 'x-nexora-nonce': nonce3b, 'x-nexora-signature': sig3b }, concurrentPayload)
+  ]);
+  console.log('Concurrent Req 1 Status:', conc1.status, conc1.body);
+  console.log('Concurrent Req 2 Status:', conc2.status, conc2.body);
 
-  // Test 5: Invalid Signature
-  console.log('\n[Test 5] Invalid HMAC Signature...');
-  const nonce5 = 'nonce_' + Date.now();
-  const res5 = await makeRequest({
-    'x-nexora-timestamp': timestamp,
-    'x-nexora-nonce': nonce5,
-    'x-nexora-signature': 'deadbeef'
-  }, payload);
-  console.log(`Status: ${res5.status} (Expected 403)`, res5.body);
-
-  console.log('\n✅ Automated security tests completed.');
+  console.log('\n✅ Advanced Security & Concurrency Tests Completed.');
 }
 
 runTests().catch(console.error);

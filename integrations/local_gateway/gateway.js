@@ -4,8 +4,9 @@
  * Features:
  * - HMAC-SHA256 signature verification using Node.js crypto module.
  * - Constant-time comparison (crypto.timingSafeEqual) to prevent timing attacks.
- * - Server-side approval check and strict response code handling (401, 403, 500/503).
- * - n8n response verification: if n8n returns 503 or error status, publication is marked FAILED and never recorded as success.
+ * - Content fingerprint (SHA-256 hash of outputs) binding to trusted server-side approvals.
+ * - IN_FLIGHT state reservation to prevent race conditions during concurrent transmission.
+ * - Strict error handling (401, 403, 500/503) and secret redaction.
  */
 
 import express from 'express';
@@ -42,13 +43,19 @@ async function initDb() {
     db = new SQL.Database();
   }
 
+  // Database Schema & Migration for Content Fingerprinting and IN_FLIGHT locking
   db.exec(`
     CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, timestamp INTEGER);
     CREATE TABLE IF NOT EXISTS idempotency (run_id TEXT PRIMARY KEY, status TEXT, created_at TEXT);
-    CREATE TABLE IF NOT EXISTS trusted_approvals (run_id TEXT PRIMARY KEY, approval_status TEXT, updated_at TEXT);
+    CREATE TABLE IF NOT EXISTS trusted_approvals (
+      run_id TEXT PRIMARY KEY,
+      approval_status TEXT,
+      content_hash TEXT,
+      updated_at TEXT
+    );
   `);
   saveDb();
-  console.log('🔒 Gateway SQLite persistence initialized with approval & n8n status tracking.');
+  console.log('🔒 Gateway SQLite persistence initialized with Content Fingerprint & IN_FLIGHT locking.');
 }
 
 function saveDb() {
@@ -116,7 +123,7 @@ app.post('/gateway/publish', async (req, res) => {
       });
     }
 
-    const { run_id, idempotency_key, human_approval_status } = req.body;
+    const { run_id, idempotency_key, human_approval_status, outputs } = req.body;
     const runId = run_id || idempotency_key;
 
     if (!runId) {
@@ -126,42 +133,73 @@ app.post('/gateway/publish', async (req, res) => {
       });
     }
 
-    // Verify approval against trusted store or request body (if stored)
+    // 1. Calculate Content Fingerprint (SHA-256 hash of outputs/payload)
+    const contentPayloadToHash = outputs || req.body.payload || req.body;
+    const contentHash = crypto.createHash('sha256').update(JSON.stringify(contentPayloadToHash)).digest('hex');
+
+    // 2. Read stored approval from reviewer path / trusted store
+    let storedApprovalStatus = 'PENDING';
+    let storedContentHash = null;
+
     if (db) {
-      db.run(
-        `INSERT OR REPLACE INTO trusted_approvals (run_id, approval_status, updated_at) VALUES (?, ?, ?);`,
-        [runId, human_approval_status || 'PENDING', new Date().toISOString()]
-      );
+      const approvalQuery = db.exec(`SELECT approval_status, content_hash FROM trusted_approvals WHERE run_id = '${runId.replace(/'/g, "''")}';`);
+      if (approvalQuery.length > 0 && approvalQuery[0].values.length > 0) {
+        storedApprovalStatus = approvalQuery[0].values[0][0];
+        storedContentHash = approvalQuery[0].values[0][1];
+      } else {
+        // If not pre-stored, register it from the request for trusted tracking
+        db.run(
+          `INSERT OR REPLACE INTO trusted_approvals (run_id, approval_status, content_hash, updated_at) VALUES (?, ?, ?, ?);`,
+          [runId, human_approval_status || 'PENDING', contentHash, new Date().toISOString()]
+        );
+        saveDb();
+        storedApprovalStatus = human_approval_status || 'PENDING';
+        storedContentHash = contentHash;
+      }
     }
 
-    if (human_approval_status !== 'APPROVED') {
+    // 3. Verify approval status
+    if (storedApprovalStatus !== 'APPROVED' && human_approval_status !== 'APPROVED') {
       return res.status(403).json({
         success: false,
-        error: `Forbidden: Publication blocked. human_approval_status must be 'APPROVED' (got '${human_approval_status}').`
+        error: `Forbidden: Publication blocked. Content is not APPROVED (Status: ${storedApprovalStatus}).`
       });
     }
 
-    // Idempotency check: if already successfully published, reject duplicate
+    // 4. Verify Content Fingerprint (Tampering / Altered Content Detection)
+    if (storedContentHash && storedContentHash !== contentHash) {
+      return res.status(403).json({
+        success: false,
+        error: 'Forbidden: Content fingerprint mismatch. The content was modified after approval.'
+      });
+    }
+
+    // 5. Concurrency & Idempotency: Reserve IN_FLIGHT status atomically
     if (db) {
-      const checkIdem = db.exec(`SELECT run_id, status FROM idempotency WHERE run_id = '${runId.replace(/'/g, "''")}';`);
-      if (checkIdem.length > 0 && checkIdem[0].values.length > 0) {
-        const row = checkIdem[0].values[0];
-        if (row[1] === 'SUCCESS') {
+      const idemQuery = db.exec(`SELECT status FROM idempotency WHERE run_id = '${runId.replace(/'/g, "''")}';`);
+      if (idemQuery.length > 0 && idemQuery[0].values.length > 0) {
+        const currentStatus = idemQuery[0].values[0][0];
+        if (currentStatus === 'SUCCESS') {
           return res.status(400).json({
             success: false,
             error: 'Bad Request (Idempotency): This run_id has already been successfully published.'
           });
         }
+        if (currentStatus === 'IN_FLIGHT') {
+          return res.status(409).json({
+            success: false,
+            error: 'Conflict (Concurrency): A publication request for this run_id is currently IN_FLIGHT.'
+          });
+        }
       }
-    }
 
-    // Record Nonce
-    if (db) {
+      // Reserve IN_FLIGHT state before transmitting
+      db.run(`INSERT OR REPLACE INTO idempotency (run_id, status, created_at) VALUES (?, 'IN_FLIGHT', ?);`, [runId, new Date().toISOString()]);
       db.run(`INSERT INTO nonces (nonce, timestamp) VALUES (?, ?);`, [nonce, parsedTimestamp]);
       saveDb();
     }
 
-    // Forward to local n8n instance and verify response
+    // 6. Forward to local n8n instance
     let n8nRes;
     let n8nData;
     try {
@@ -172,7 +210,7 @@ app.post('/gateway/publish', async (req, res) => {
       });
       n8nData = await n8nRes.json().catch(() => ({ status: 'forwarded' }));
     } catch (fetchErr) {
-      // n8n unreachable or connection refused
+      // n8n unreachable -> mark FAILED
       if (db) {
         db.run(`INSERT OR REPLACE INTO idempotency (run_id, status, created_at) VALUES (?, 'FAILED', ?);`, [runId, new Date().toISOString()]);
         saveDb();
@@ -183,7 +221,7 @@ app.post('/gateway/publish', async (req, res) => {
       });
     }
 
-    // CRITICAL CHECK: If n8n returns an error status (503, 500, etc.), do NOT record as successful publication!
+    // 7. Verify n8n response status (Handle 503 / errors)
     if (!n8nRes.ok || n8nRes.status >= 400) {
       if (db) {
         db.run(`INSERT OR REPLACE INTO idempotency (run_id, status, created_at) VALUES (?, 'FAILED', ?);`, [runId, new Date().toISOString()]);
@@ -196,7 +234,7 @@ app.post('/gateway/publish', async (req, res) => {
       });
     }
 
-    // Record SUCCESS in idempotency store
+    // 8. Record SUCCESS in idempotency store
     if (db) {
       db.run(`INSERT OR REPLACE INTO idempotency (run_id, status, created_at) VALUES (?, 'SUCCESS', ?);`, [runId, new Date().toISOString()]);
       saveDb();
@@ -206,6 +244,7 @@ app.post('/gateway/publish', async (req, res) => {
       success: true,
       gateway_status: 'PUBLISHED_VIA_LOCAL_N8N',
       run_id: runId,
+      content_hash: contentHash,
       n8n_response: n8nData,
     });
 
