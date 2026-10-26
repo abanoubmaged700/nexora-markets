@@ -1,0 +1,179 @@
+{
+  "name": "NEXORA - News Engine Error Log v1",
+  "nodes": [
+    {
+      "id": "on-workflow-error",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "normalize-failure",
+      "name": "Normalize failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        250,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const e=items[0]?.json||{};\nconst now=new Date().toISOString();\nreturn [{json:{source_id:'error:'+String(e.execution?.id||now),title:String(e.workflow?.name||'NEXORA News Engine')+' / '+String(e.execution?.lastNodeExecuted||'unknown'),source_url:'',source_utc:now,source_cairo:new Intl.DateTimeFormat('ar-EG',{timeZone:'Africa/Cairo',dateStyle:'medium',timeStyle:'short'}).format(new Date()),draft:String(e.execution?.error?.message||e.trigger?.error?.message||'Unknown error').slice(0,1200),status:'error',created_utc:now,telegram_message_id:''}}];"
+      }
+    },
+    {
+      "id": "record-error",
+      "name": "Record error",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "NEXORA_News_Log"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "source_id": "={{ $json.source_id }}",
+            "title": "={{ $json.title }}",
+            "source_url": "={{ $json.source_url }}",
+            "source_utc": "={{ $json.source_utc }}",
+            "source_cairo": "={{ $json.source_cairo }}",
+            "draft": "={{ $json.draft }}",
+            "status": "error",
+            "created_utc": "={{ $json.created_utc }}",
+            "telegram_message_id": ""
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "source_id",
+              "displayName": "source_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_url",
+              "displayName": "source_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_utc",
+              "displayName": "source_utc",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_cairo",
+              "displayName": "source_cairo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "draft",
+              "displayName": "draft",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_utc",
+              "displayName": "created_utc",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "telegram_message_id",
+              "displayName": "telegram_message_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Normalize failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize failure": {
+      "main": [
+        [
+          {
+            "node": "Record error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Africa/Cairo",
+    "executionOrder": "v1",
+    "saveExecutionProgress": true
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

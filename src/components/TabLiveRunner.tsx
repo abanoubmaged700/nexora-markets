@@ -65,10 +65,7 @@ export const TabLiveRunner: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           agentId: selectedAgentId,
-          systemInstruction: agentDef?.systemPrompt,
           inputPayload: parsedInput,
-          model: 'gemini-3.8-flash',
-          forceDeterministicRisk: selectedAgentId === 'risk_guardian_agent',
         }),
       });
 

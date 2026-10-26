@@ -66,7 +66,6 @@ export const TabN8nIntegration: React.FC = () => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [isRunningSuite, setIsRunningSuite] = useState<boolean>(false);
   const [suiteResults, setSuiteResults] = useState<WebhookTestResult[] | null>(null);
-  const [n8nEndpoint, setN8nEndpoint] = useState<string>('http://localhost:5678/webhook/nexora');
   const [diagnosticResult, setDiagnosticResult] = useState<any | null>(null);
   const [isCheckingDiagnostics, setIsCheckingDiagnostics] = useState<boolean>(false);
 
@@ -130,11 +129,13 @@ export const TabN8nIntegration: React.FC = () => {
                 const res = await fetch('/api/n8n/health-check', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ targetUrl: n8nEndpoint }),
+                  body: JSON.stringify({}),
                 });
                 const data = await res.json();
                 if (data.success) {
                   setDiagnosticResult(data.diagnosis);
+                } else {
+                  setDiagnosticResult({ connection_status: 'FAILED', error_message: data.error || String(res.status), recommendation: 'اضبط N8N_HEALTH_URL في إعدادات الخادم؛ الحقل المحلي لا يغيّر الوجهة.' });
                 }
               } catch (err) {
                 console.error('Diagnostics error:', err);
@@ -171,8 +172,8 @@ export const TabN8nIntegration: React.FC = () => {
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                value={n8nEndpoint}
-                onChange={(e) => setN8nEndpoint(e.target.value)}
+                value="N8N_HEALTH_URL — إعدادات الخادم"
+                readOnly
                 className="bg-slate-950 p-1.5 rounded border border-slate-700 text-amber-300 text-xs w-full focus:outline-none"
               />
             </div>
